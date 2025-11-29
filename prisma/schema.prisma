@@ -1,0 +1,313 @@
+// ClientPulse AI - Database Schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & WORKSPACE
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  password      String?
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspaceMembers WorkspaceMember[]
+  createdClients   Client[]
+  interactions     ClientInteraction[]
+  alerts           Alert[]
+  auditLogs        AuditLog[]
+
+  @@index([email])
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("starter") // starter, growth, scale, enterprise
+  status    String   @default("active") // active, suspended, cancelled
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members          WorkspaceMember[]
+  clients          Client[]
+  surveys          Survey[]
+  automationRules  AutomationRule[]
+  subscription     Subscription?
+  aiRequestLogs    AIRequestLog[]
+
+  @@index([slug])
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        String   @default("member") // owner, admin, member
+  inviteEmail String?
+  status      String   @default("active") // active, invited, suspended
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+// ============================================
+// CLIENT MANAGEMENT
+// ============================================
+
+model Client {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  email       String?
+  company     String?
+  phone       String?
+  avatar      String?
+  tags        String[] @default([])
+  status      String   @default("active") // active, churned, paused
+  
+  // Health metrics
+  healthScore      Float    @default(75.0)
+  riskLevel        String   @default("healthy") // healthy, at_risk, critical
+  lastContactDate  DateTime?
+  nextFollowUpDate DateTime?
+  
+  // Business metrics
+  monthlyValue     Float?
+  lifetimeValue    Float?
+  contractEndDate  DateTime?
+  
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy         User                @relation(fields: [createdById], references: [id])
+  interactions      ClientInteraction[]
+  surveyResponses   SurveyResponse[]
+  healthHistory     HealthScoreHistory[]
+  alerts            Alert[]
+
+  @@index([workspaceId])
+  @@index([email])
+  @@index([riskLevel])
+  @@index([healthScore])
+}
+
+model ClientInteraction {
+  id          String   @id @default(cuid())
+  clientId    String
+  userId      String
+  type        String   // note, email, meeting, call, feedback
+  subject     String?
+  content     String
+  sentiment   String?  // positive, neutral, negative
+  sentimentScore Float?
+  metadata    Json?    // Additional structured data
+  occurredAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([clientId])
+  @@index([type])
+  @@index([occurredAt])
+}
+
+// ============================================
+// SURVEYS & FEEDBACK
+// ============================================
+
+model Survey {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  type        String   // nps, csat, sentiment
+  questions   Json     // Array of question objects
+  status      String   @default("active") // active, paused, archived
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  responses SurveyResponse[]
+
+  @@index([workspaceId])
+}
+
+model SurveyResponse {
+  id         String   @id @default(cuid())
+  surveyId   String
+  clientId   String
+  score      Float?   // NPS: 0-10, CSAT: 1-5
+  answers    Json     // Full response data
+  sentiment  String?  // positive, neutral, negative
+  aiSummary  String?  // AI-generated summary
+  submittedAt DateTime @default(now())
+
+  survey Survey @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([surveyId])
+  @@index([clientId])
+  @@index([submittedAt])
+}
+
+// ============================================
+// HEALTH SCORING & ALERTS
+// ============================================
+
+model HealthScoreHistory {
+  id          String   @id @default(cuid())
+  clientId    String
+  score       Float
+  riskLevel   String
+  factors     Json     // Breakdown of score calculation
+  calculatedAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([calculatedAt])
+}
+
+model Alert {
+  id          String   @id @default(cuid())
+  clientId    String
+  userId      String?
+  type        String   // churn_risk, health_decline, missed_followup
+  severity    String   // low, medium, high, critical
+  title       String
+  message     String
+  actionTaken Boolean  @default(false)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  resolvedAt  DateTime?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([actionTaken])
+  @@index([createdAt])
+}
+
+// ============================================
+// AUTOMATION
+// ============================================
+
+model AutomationRule {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  trigger     String   // health_score_drop, risk_level_change, survey_response
+  conditions  Json     // Rule conditions
+  actions     Json     // Actions to execute
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([enabled])
+}
+
+// ============================================
+// BILLING
+// ============================================
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @unique
+  stripeCustomerId     String    @unique
+  stripeSubscriptionId String?   @unique
+  stripePriceId        String?
+  plan                 String    // starter, growth, scale, enterprise
+  status               String    // active, trialing, past_due, canceled
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  seats                Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+}
+
+// ============================================
+// AI & SYSTEM
+// ============================================
+
+model AIRequestLog {
+  id          String   @id @default(cuid())
+  workspaceId String
+  type        String   // sentiment_analysis, summary, retention_action
+  model       String
+  tokensUsed  Int?
+  cost        Float?
+  success     Boolean  @default(true)
+  error       String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String
+  action      String   // user_login, client_created, alert_resolved
+  resource    String?  // Resource type
+  resourceId  String?  // Resource ID
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model JobQueue {
+  id          String   @id @default(cuid())
+  name        String
+  data        Json
+  status      String   @default("pending") // pending, processing, completed, failed
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(3)
+  error       String?
+  scheduledFor DateTime?
+  processedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([status])
+  @@index([scheduledFor])
+  @@index([name])
+}
